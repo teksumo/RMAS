@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "242512329515",
+    "project_id": "rmas-projekat-marko-kostic",
+    "storage_bucket": "rmas-projekat-marko-kostic.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:242512329515:android:b298f7d36744b80a31636e",
+        "android_client_info": {
+          "package_name": "com.example.rmas_projekat_marko_kostic"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAhATqVqlBd6S9s913KsMNwcvbNHEAzhi0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
