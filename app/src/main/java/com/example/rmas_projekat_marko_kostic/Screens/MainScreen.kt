@@ -40,6 +40,10 @@ fun MainScreen(navController: NavController) {
             }) {
                 Text("Open Map")
             }
+
+            Button(onClick = { navController.navigate("add_object") }) {
+                Text("Add Object")
+            }
         }
     }
 }

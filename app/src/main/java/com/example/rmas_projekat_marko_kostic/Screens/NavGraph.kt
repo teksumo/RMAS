@@ -13,5 +13,6 @@ fun NavGraph(navController: NavHostController) {
         composable("register") { RegisterScreen(navController) }
         composable("main") { MainScreen(navController) } // Placeholder for the main screen
         composable("map") { MapsScreen() } // Dodaj rutu za MapsScreen
+        composable("add_object") { AddObjectScreen(navController) }
     }
 }
