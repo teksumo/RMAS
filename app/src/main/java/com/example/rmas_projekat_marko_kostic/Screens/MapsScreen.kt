@@ -15,7 +15,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
@@ -27,20 +28,27 @@ import com.google.android.gms.maps.GoogleMap
 import com.google.android.gms.maps.model.BitmapDescriptorFactory
 import com.google.android.gms.maps.model.LatLng
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.Transaction
 import com.google.maps.android.compose.GoogleMap
 import com.google.maps.android.compose.MapProperties
 import com.google.maps.android.compose.Marker
 import com.google.maps.android.compose.rememberCameraPositionState
+import java.text.SimpleDateFormat
+import java.util.*
+import androidx.compose.ui.platform.LocalContext
+
 
 data class MapObject(
     val name: String,
     val description: String,
-    val rating: Int,
+    val rating: Double,
     val latitude: Double,
     val longitude: Double,
     val imageUrl: String,
-    val addedBy: String
+    val addedBy: String,
+    val numberReviews: Int
 )
 
 @OptIn(ExperimentalPermissionsApi::class)
@@ -54,8 +62,27 @@ fun MapsScreen() {
         position = com.google.android.gms.maps.model.CameraPosition(LatLng(0.0, 0.0), 15f, 0f, 0f)
     }
     var selectedObject by remember { mutableStateOf<MapObject?>(null) }
+    var showReviewDialog by remember { mutableStateOf(false) }
+    var showReviewsDialog by remember { mutableStateOf(false) }
+    var showAlreadyReviewedDialog by remember { mutableStateOf(false) }
+    var showAlreadyVisitedDialog by remember { mutableStateOf(false) }
+    var currentUsername by remember { mutableStateOf("") }
     val firestore = FirebaseFirestore.getInstance()
     var mapObjects by remember { mutableStateOf<List<MapObject>>(emptyList()) }
+
+    val currentUser = FirebaseAuth.getInstance().currentUser
+
+    LaunchedEffect(currentUser) {
+        currentUser?.let {
+            firestore.collection("users").document(it.uid).get()
+                .addOnSuccessListener { document ->
+                    currentUsername = document.getString("username") ?: ""
+                }
+                .addOnFailureListener { exception ->
+                    Log.e("MapsScreen", "Error fetching username", exception)
+                }
+        }
+    }
 
     LaunchedEffect(locationPermissionState.hasPermission) {
         if (locationPermissionState.hasPermission) {
@@ -110,16 +137,56 @@ fun MapsScreen() {
                     mapObject = obj,
                     onDismissRequest = { selectedObject = null },
                     onVisit = {
-                        addPoints("visit")
-                        Toast.makeText(context, "Visited!", Toast.LENGTH_SHORT).show()
-                        selectedObject = null
+                        checkIfUserVisited(obj) { visited ->
+                            if (visited) {
+                                showAlreadyVisitedDialog = true
+                            } else {
+                                markAsVisited(obj)
+                                addPoints("visit")
+                                Toast.makeText(context, "Marked as visited!", Toast.LENGTH_SHORT).show()
+                                selectedObject = null
+                            }
+                        }
                     },
-                    onAddReview = { review ->
+                    onAddReview = {
+                        checkIfUserReviewed(obj, currentUsername) { reviewed ->
+                            if (reviewed) {
+                                showAlreadyReviewedDialog = true
+                            } else {
+                                showReviewDialog = true
+                            }
+                        }
+                    },
+                    onViewReviews = { showReviewsDialog = true }
+                )
+            }
+            if (showReviewDialog && selectedObject != null) {
+                AddReviewDialog(
+                    mapObject = selectedObject!!,
+                    onDismissRequest = { showReviewDialog = false },
+                    onSubmitReview = { review, rating ->
+                        addReviewToObject(selectedObject!!, review, rating, currentUsername)
                         addPoints("review")
-                        addReviewToObject(obj, review)
                         Toast.makeText(context, "Review added!", Toast.LENGTH_SHORT).show()
+                        showReviewDialog = false
                         selectedObject = null
                     }
+                )
+            }
+            if (showReviewsDialog && selectedObject != null) {
+                ShowReviewsDialog(
+                    mapObject = selectedObject!!,
+                    onDismissRequest = { showReviewsDialog = false }
+                )
+            }
+            if (showAlreadyReviewedDialog) {
+                AlreadyReviewedDialog(
+                    onDismissRequest = { showAlreadyReviewedDialog = false }
+                )
+            }
+            if (showAlreadyVisitedDialog) {
+                AlreadyVisitedDialog(
+                    onDismissRequest = { showAlreadyVisitedDialog = false }
                 )
             }
         }
@@ -131,10 +198,9 @@ fun ObjectDetailsDialog(
     mapObject: MapObject,
     onDismissRequest: () -> Unit,
     onVisit: () -> Unit,
-    onAddReview: (String) -> Unit
+    onAddReview: () -> Unit,
+    onViewReviews: () -> Unit
 ) {
-    var reviewText by remember { mutableStateOf("") }
-
     AlertDialog(
         onDismissRequest = onDismissRequest,
         title = { Text(mapObject.name) },
@@ -148,24 +214,152 @@ fun ObjectDetailsDialog(
                         .height(200.dp)
                 )
                 Text("Description: ${mapObject.description}")
-                Text("Rating: ${mapObject.rating}")
+                Text("Rating: %.2f (%d reviews)".format(mapObject.rating, mapObject.numberReviews))
+            }
+        },
+        confirmButton = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Button(
+                    onClick = onVisit,
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp)
+                ) {
+                    Text("Mark As Visited")
+                }
+                Button(
+                    onClick = onAddReview,
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp)
+                ) {
+                    Text("Add Review")
+                }
+                Button(
+                    onClick = onViewReviews,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Reviews")
+                }
+            }
+        }
+    )
+}
+
+@Composable
+fun AddReviewDialog(
+    mapObject: MapObject,
+    onDismissRequest: () -> Unit,
+    onSubmitReview: (String, Int) -> Unit
+) {
+    var reviewText by remember { mutableStateOf("") }
+    var rating by remember { mutableStateOf(1) } // Default rating
+
+    AlertDialog(
+        onDismissRequest = onDismissRequest,
+        title = { Text("Add Review for ${mapObject.name}") },
+        text = {
+            Column {
                 OutlinedTextField(
                     value = reviewText,
                     onValueChange = { reviewText = it },
                     label = { Text("Your Review") },
                     modifier = Modifier.fillMaxWidth()
                 )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("Rating:")
+                Slider(
+                    value = rating.toFloat(),
+                    onValueChange = { rating = it.toInt() },
+                    valueRange = 1f..5f,
+                    steps = 3,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text("Rating: $rating")
             }
         },
         confirmButton = {
-            Row {
-                Button(onClick = onVisit) {
-                    Text("Visited")
+            Button(onClick = { onSubmitReview(reviewText, rating) }) {
+                Text("Submit Review")
+            }
+        }
+    )
+}
+
+@Composable
+fun ShowReviewsDialog(
+    mapObject: MapObject,
+    onDismissRequest: () -> Unit
+) {
+    val firestore = FirebaseFirestore.getInstance()
+    var reviews by remember { mutableStateOf<List<Map<String, Any>>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+
+    LaunchedEffect(mapObject) {
+        firestore.collection("objects").document(mapObject.name.replace(" ", "_")).get()
+            .addOnSuccessListener { document ->
+                val comments = document.get("comments") as? List<Map<String, Any>> ?: emptyList()
+                reviews = comments
+                loading = false
+            }
+            .addOnFailureListener { exception ->
+                Log.e("MapsScreen", "Error fetching reviews", exception)
+                loading = false
+            }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismissRequest,
+        title = { Text("Reviews") },
+        text = {
+            if (loading) {
+                Text("Loading Reviews...")
+            } else {
+                Column {
+                    reviews.forEach { review ->
+                        val user = review["user_id"] as? String ?: "Anonymous"
+                        val comment = review["comment_text"] as? String ?: ""
+                        val rating = (review["rating"] as? Long)?.toInt() ?: 0
+                        val timestamp = review["timestamp"] as? Long ?: 0L
+                        val date = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()).format(Date(timestamp))
+
+                        Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                            Text("User: $user", fontWeight = FontWeight.Bold)
+                            Text("Rating: $rating")
+                            Text("Comment: $comment")
+                            Text("Date: $date")
+                        }
+                    }
                 }
-                Spacer(modifier = Modifier.width(8.dp))
-                Button(onClick = { onAddReview(reviewText) }) {
-                    Text("Add Review")
-                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onDismissRequest) {
+                Text("Close")
+            }
+        }
+    )
+}
+
+@Composable
+fun AlreadyReviewedDialog(onDismissRequest: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismissRequest,
+        title = { Text("Review Already Exists") },
+        text = { Text("You already left a review, you cannot do it again.") },
+        confirmButton = {
+            Button(onClick = onDismissRequest) {
+                Text("OK")
+            }
+        }
+    )
+}
+
+@Composable
+fun AlreadyVisitedDialog(onDismissRequest: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismissRequest,
+        title = { Text("Already Marked as Visited") },
+        text = { Text("You have already marked this object as visited.") },
+        confirmButton = {
+            Button(onClick = onDismissRequest) {
+                Text("OK")
             }
         }
     )
@@ -219,16 +413,17 @@ private fun fetchMapObjects(firestore: FirebaseFirestore, onObjectsFetched: (Lis
             val objects = documents.mapNotNull { document ->
                 val name = document.getString("name")
                 val description = document.getString("description")
-                val rating = document.getLong("rating")?.toInt()
+                val rating = document.getDouble("rating") ?: 0.0
                 val latitude = document.getDouble("latitude")
                 val longitude = document.getDouble("longitude")
                 val imageUrl = document.getString("image_url")
                 val addedBy = document.getString("added_by")
+                val numberReviews = document.getLong("number_reviews")?.toInt() ?: 0
 
                 Log.d("MapsScreen", "Document data: ${document.data}")
 
-                if (name != null && description != null && rating != null && latitude != null && longitude != null && imageUrl != null && addedBy != null) {
-                    MapObject(name, description, rating, latitude, longitude, imageUrl, addedBy)
+                if (name != null && description != null && latitude != null && longitude != null && imageUrl != null && addedBy != null) {
+                    MapObject(name, description, rating, latitude, longitude, imageUrl, addedBy, numberReviews)
                 } else {
                     Log.d("MapsScreen", "Invalid object data: $document")
                     null
@@ -268,22 +463,79 @@ private fun addPoints(action: String) {
         }
 }
 
-private fun addReviewToObject(mapObject: MapObject, reviewText: String) {
+private fun addReviewToObject(mapObject: MapObject, reviewText: String, rating: Int, username: String) {
     val firestore = FirebaseFirestore.getInstance()
-    val currentUser = FirebaseAuth.getInstance().currentUser
     val reviewData = mapOf(
-        "user_id" to (currentUser?.displayName ?: "Anonymous"),
+        "user_id" to username,
         "comment_text" to reviewText,
-        "timestamp" to System.currentTimeMillis()
+        "timestamp" to System.currentTimeMillis(),
+        "rating" to rating
     )
 
-    firestore.collection("objects").document(mapObject.name).update("comments", reviewData)
-        .addOnSuccessListener {
-            Log.d("MapsScreen", "Review added successfully")
+    firestore.runTransaction { transaction ->
+        val snapshot = transaction.get(firestore.collection("objects").document(mapObject.name.replace(" ", "_")))
+        val numberReviews = snapshot.getLong("number_reviews")?.toInt() ?: 0
+        val currentRating = snapshot.getDouble("rating") ?: 0.0
+
+        val newNumberReviews = numberReviews + 1
+        val newRating = ((currentRating * numberReviews) + rating) / newNumberReviews
+
+        transaction.update(firestore.collection("objects").document(mapObject.name.replace(" ", "_")), "number_reviews", newNumberReviews)
+        transaction.update(firestore.collection("objects").document(mapObject.name.replace(" ", "_")), "rating", newRating)
+        transaction.update(firestore.collection("objects").document(mapObject.name.replace(" ", "_")), "comments", FieldValue.arrayUnion(reviewData))
+    }.addOnSuccessListener {
+        Log.d("MapsScreen", "Review added successfully")
+    }.addOnFailureListener { e ->
+        Log.e("MapsScreen", "Error adding review", e)
+    }
+}
+
+private fun checkIfUserReviewed(mapObject: MapObject, username: String, onResult: (Boolean) -> Unit) {
+    val firestore = FirebaseFirestore.getInstance()
+
+    firestore.collection("objects").document(mapObject.name.replace(" ", "_")).get()
+        .addOnSuccessListener { document ->
+            val comments = document.get("comments") as? List<Map<String, Any>> ?: emptyList()
+            val reviewed = comments.any { it["user_id"] == username }
+            onResult(reviewed)
         }
-        .addOnFailureListener { e ->
-            Log.e("MapsScreen", "Error adding review", e)
+        .addOnFailureListener { exception ->
+            Log.e("MapsScreen", "Error checking reviews", exception)
+            onResult(false)
         }
+}
+
+private fun checkIfUserVisited(mapObject: MapObject, onResult: (Boolean) -> Unit) {
+    val firestore = FirebaseFirestore.getInstance()
+    val currentUser = FirebaseAuth.getInstance().currentUser
+
+    firestore.collection("users").document(currentUser?.uid ?: "").get()
+        .addOnSuccessListener { document ->
+            val visited = document.get("visited") as? Map<*, *>
+            val hasVisited = visited?.containsKey(mapObject.name.replace(" ", "_")) ?: false
+            onResult(hasVisited)
+        }
+        .addOnFailureListener { exception ->
+            Log.e("MapsScreen", "Error checking visited objects", exception)
+            onResult(false)
+        }
+}
+
+private fun markAsVisited(mapObject: MapObject) {
+    val firestore = FirebaseFirestore.getInstance()
+    val currentUser = FirebaseAuth.getInstance().currentUser
+
+    currentUser?.let { user ->
+        val visitedData = mapOf(mapObject.name.replace(" ", "_") to true)
+        firestore.collection("users").document(user.uid)
+            .update("visited", FieldValue.arrayUnion(visitedData))
+            .addOnSuccessListener {
+                Log.d("MapsScreen", "Marked as visited successfully")
+            }
+            .addOnFailureListener { e ->
+                Log.e("MapsScreen", "Error marking as visited", e)
+            }
+    }
 }
 
 private fun resizeBitmap(context: Context, drawableRes: Int, width: Int, height: Int): Bitmap {
