@@ -15,6 +15,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
@@ -37,8 +38,6 @@ import com.google.maps.android.compose.Marker
 import com.google.maps.android.compose.rememberCameraPositionState
 import java.text.SimpleDateFormat
 import java.util.*
-import androidx.compose.ui.platform.LocalContext
-
 
 data class MapObject(
     val name: String,
@@ -48,7 +47,8 @@ data class MapObject(
     val longitude: Double,
     val imageUrl: String,
     val addedBy: String,
-    val numberReviews: Int
+    val numberReviews: Int,
+    val timestamp: Long
 )
 
 @OptIn(ExperimentalPermissionsApi::class)
@@ -71,6 +71,15 @@ fun MapsScreen() {
     var mapObjects by remember { mutableStateOf<List<MapObject>>(emptyList()) }
 
     val currentUser = FirebaseAuth.getInstance().currentUser
+
+    // Filter states
+    var filterName by remember { mutableStateOf("") }
+    var filterAuthor by remember { mutableStateOf("") }
+    var filterRating by remember { mutableStateOf(0.0) }
+    var filterStartDate by remember { mutableStateOf<Long?>(null) }
+    var filterEndDate by remember { mutableStateOf<Long?>(null) }
+    var filterRadius by remember { mutableStateOf<Float?>(null) }
+    var showFilters by remember { mutableStateOf(false) }
 
     LaunchedEffect(currentUser) {
         currentUser?.let {
@@ -106,90 +115,221 @@ fun MapsScreen() {
     }
 
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-        Box(modifier = Modifier.fillMaxSize()) {
-            GoogleMap(
-                modifier = Modifier.fillMaxSize(),
-                cameraPositionState = cameraPositionState,
-                properties = MapProperties(isMyLocationEnabled = locationPermissionState.hasPermission)
+        Column {
+            // Button to toggle filter visibility
+            Button(
+                onClick = { showFilters = !showFilters },
+                modifier = Modifier
+                    .padding(16.dp)
+                    .fillMaxWidth()
             ) {
-                val customPin = resizeBitmap(context, R.drawable.custom_pin, 100, 100) // Resize bitmap to desired size
-                mapObjects.forEach { obj ->
-                    Marker(
-                        position = LatLng(obj.latitude, obj.longitude),
-                        title = obj.name,
-                        snippet = obj.description,
-                        icon = BitmapDescriptorFactory.fromBitmap(customPin),
-                        onClick = {
-                            selectedObject = obj
-                            true
+                Text(if (showFilters) "Hide Filters" else "Show Filters")
+            }
+
+            // Filter UI
+            if (showFilters) {
+                FilterSection(
+                    filterName = filterName,
+                    onNameChange = { filterName = it },
+                    filterAuthor = filterAuthor,
+                    onAuthorChange = { filterAuthor = it },
+                    filterRating = filterRating,
+                    onRatingChange = { filterRating = it },
+                    filterStartDate = filterStartDate,
+                    onStartDateChange = { filterStartDate = it },
+                    filterEndDate = filterEndDate,
+                    onEndDateChange = { filterEndDate = it },
+                    filterRadius = filterRadius,
+                    onRadiusChange = { filterRadius = it }
+                )
+            }
+
+            Box(modifier = Modifier.fillMaxSize()) {
+                GoogleMap(
+                    modifier = Modifier.fillMaxSize(),
+                    cameraPositionState = cameraPositionState,
+                    properties = MapProperties(isMyLocationEnabled = locationPermissionState.hasPermission)
+                ) {
+                    val customPin = resizeBitmap(context, R.drawable.custom_pin, 100, 100) // Resize bitmap to desired size
+                    val filteredObjects = mapObjects.filter {
+                        val isNameMatch = filterName.isEmpty() || it.name.contains(filterName, ignoreCase = true)
+                        val isAuthorMatch = filterAuthor.isEmpty() || it.addedBy.contains(filterAuthor, ignoreCase = true)
+                        val isRatingMatch = filterRating == 0.0 || it.rating >= filterRating
+                        val isStartDateMatch = filterStartDate == null || it.timestamp >= filterStartDate!!
+                        val isEndDateMatch = filterEndDate == null || it.timestamp <= filterEndDate!!
+                        val isRadiusMatch = filterRadius == null || (currentLocation != null && distanceBetween(
+                            currentLocation!!.latitude,
+                            currentLocation!!.longitude,
+                            it.latitude,
+                            it.longitude
+                        ) <= filterRadius!!)
+                        isNameMatch && isAuthorMatch && isRatingMatch && isStartDateMatch && isEndDateMatch && isRadiusMatch
+                    }
+                    filteredObjects.forEach { obj ->
+                        Marker(
+                            position = LatLng(obj.latitude, obj.longitude),
+                            title = obj.name,
+                            snippet = obj.description,
+                            icon = BitmapDescriptorFactory.fromBitmap(customPin),
+                            onClick = {
+                                selectedObject = obj
+                                true
+                            }
+                        )
+                    }
+                }
+                currentLocation?.let {
+                    LaunchedEffect(it) {
+                        cameraPositionState.position = com.google.android.gms.maps.model.CameraPosition(it, 15f, 0f, 0f)
+                        Log.d("MapsScreen", "Camera position updated: $it")
+                    }
+                }
+                selectedObject?.let { obj ->
+                    ObjectDetailsDialog(
+                        mapObject = obj,
+                        onDismissRequest = { selectedObject = null },
+                        onVisit = {
+                            checkIfUserVisited(context, obj) { visited ->
+                                if (visited) {
+                                    showAlreadyVisitedDialog = true
+                                } else {
+                                    markAsVisited(context, obj)
+                                    addPoints("visit")
+                                    Toast.makeText(context, "Marked as visited!", Toast.LENGTH_SHORT).show()
+                                    selectedObject = null
+                                }
+                            }
+                        },
+                        onAddReview = {
+                            checkIfUserReviewed(obj, currentUsername) { reviewed ->
+                                if (reviewed) {
+                                    showAlreadyReviewedDialog = true
+                                } else {
+                                    showReviewDialog = true
+                                }
+                            }
+                        },
+                        onViewReviews = { showReviewsDialog = true }
+                    )
+                }
+                if (showReviewDialog && selectedObject != null) {
+                    AddReviewDialog(
+                        mapObject = selectedObject!!,
+                        onDismissRequest = { showReviewDialog = false },
+                        onSubmitReview = { review, rating ->
+                            addReviewToObject(selectedObject!!, review, rating, currentUsername)
+                            addPoints("review")
+                            Toast.makeText(context, "Review added!", Toast.LENGTH_SHORT).show()
+                            showReviewDialog = false
+                            selectedObject = null
                         }
                     )
                 }
-            }
-            currentLocation?.let {
-                LaunchedEffect(it) {
-                    cameraPositionState.position = com.google.android.gms.maps.model.CameraPosition(it, 15f, 0f, 0f)
-                    Log.d("MapsScreen", "Camera position updated: $it")
+                if (showReviewsDialog && selectedObject != null) {
+                    ShowReviewsDialog(
+                        mapObject = selectedObject!!,
+                        onDismissRequest = { showReviewsDialog = false }
+                    )
+                }
+                if (showAlreadyReviewedDialog) {
+                    AlreadyReviewedDialog(
+                        onDismissRequest = { showAlreadyReviewedDialog = false }
+                    )
+                }
+                if (showAlreadyVisitedDialog) {
+                    AlreadyVisitedDialog(
+                        onDismissRequest = { showAlreadyVisitedDialog = false }
+                    )
                 }
             }
-            selectedObject?.let { obj ->
-                ObjectDetailsDialog(
-                    mapObject = obj,
-                    onDismissRequest = { selectedObject = null },
-                    onVisit = {
-                        checkIfUserVisited(obj) { visited ->
-                            if (visited) {
-                                showAlreadyVisitedDialog = true
-                            } else {
-                                markAsVisited(obj)
-                                addPoints("visit")
-                                Toast.makeText(context, "Marked as visited!", Toast.LENGTH_SHORT).show()
-                                selectedObject = null
-                            }
-                        }
-                    },
-                    onAddReview = {
-                        checkIfUserReviewed(obj, currentUsername) { reviewed ->
-                            if (reviewed) {
-                                showAlreadyReviewedDialog = true
-                            } else {
-                                showReviewDialog = true
-                            }
-                        }
-                    },
-                    onViewReviews = { showReviewsDialog = true }
-                )
-            }
-            if (showReviewDialog && selectedObject != null) {
-                AddReviewDialog(
-                    mapObject = selectedObject!!,
-                    onDismissRequest = { showReviewDialog = false },
-                    onSubmitReview = { review, rating ->
-                        addReviewToObject(selectedObject!!, review, rating, currentUsername)
-                        addPoints("review")
-                        Toast.makeText(context, "Review added!", Toast.LENGTH_SHORT).show()
-                        showReviewDialog = false
-                        selectedObject = null
-                    }
-                )
-            }
-            if (showReviewsDialog && selectedObject != null) {
-                ShowReviewsDialog(
-                    mapObject = selectedObject!!,
-                    onDismissRequest = { showReviewsDialog = false }
-                )
-            }
-            if (showAlreadyReviewedDialog) {
-                AlreadyReviewedDialog(
-                    onDismissRequest = { showAlreadyReviewedDialog = false }
-                )
-            }
-            if (showAlreadyVisitedDialog) {
-                AlreadyVisitedDialog(
-                    onDismissRequest = { showAlreadyVisitedDialog = false }
-                )
-            }
         }
+    }
+}
+
+@Composable
+fun FilterSection(
+    filterName: String,
+    onNameChange: (String) -> Unit,
+    filterAuthor: String,
+    onAuthorChange: (String) -> Unit,
+    filterRating: Double,
+    onRatingChange: (Double) -> Unit,
+    filterStartDate: Long?,
+    onStartDateChange: (Long?) -> Unit,
+    filterEndDate: Long?,
+    onEndDateChange: (Long?) -> Unit,
+    filterRadius: Float?,
+    onRadiusChange: (Float?) -> Unit
+) {
+    Column(modifier = Modifier.padding(16.dp)) {
+        OutlinedTextField(
+            value = filterName,
+            onValueChange = onNameChange,
+            label = { Text("Filter by Name") },
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        OutlinedTextField(
+            value = filterAuthor,
+            onValueChange = onAuthorChange,
+            label = { Text("Filter by Author") },
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text("Filter by Rating: ${if (filterRating > 0) filterRating else "Any"}")
+        Slider(
+            value = filterRating.toFloat(),
+            onValueChange = { onRatingChange(it.toDouble()) },
+            valueRange = 0f..5f,
+            steps = 4,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        DatePicker(
+            label = "Start Date",
+            selectedDate = filterStartDate,
+            onDateChange = onStartDateChange
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        DatePicker(
+            label = "End Date",
+            selectedDate = filterEndDate,
+            onDateChange = onEndDateChange
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        OutlinedTextField(
+            value = filterRadius?.toString() ?: "",
+            onValueChange = { onRadiusChange(it.toFloatOrNull()) },
+            label = { Text("Filter by Radius (meters)") },
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
+}
+
+@Composable
+fun DatePicker(
+    label: String,
+    selectedDate: Long?,
+    onDateChange: (Long?) -> Unit
+) {
+    val context = LocalContext.current
+    val calendar = Calendar.getInstance()
+    val dateFormat = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
+    val datePickerDialog = remember {
+        android.app.DatePickerDialog(
+            context,
+            { _, year, month, dayOfMonth ->
+                calendar.set(year, month, dayOfMonth)
+                onDateChange(calendar.timeInMillis)
+            },
+            calendar.get(Calendar.YEAR),
+            calendar.get(Calendar.MONTH),
+            calendar.get(Calendar.DAY_OF_MONTH)
+        )
+    }
+
+    OutlinedButton(onClick = { datePickerDialog.show() }) {
+        Text(text = if (selectedDate != null) dateFormat.format(Date(selectedDate)) else label)
     }
 }
 
@@ -419,11 +559,12 @@ private fun fetchMapObjects(firestore: FirebaseFirestore, onObjectsFetched: (Lis
                 val imageUrl = document.getString("image_url")
                 val addedBy = document.getString("added_by")
                 val numberReviews = document.getLong("number_reviews")?.toInt() ?: 0
+                val timestamp = document.getLong("created_at") ?: 0L
 
                 Log.d("MapsScreen", "Document data: ${document.data}")
 
                 if (name != null && description != null && latitude != null && longitude != null && imageUrl != null && addedBy != null) {
-                    MapObject(name, description, rating, latitude, longitude, imageUrl, addedBy, numberReviews)
+                    MapObject(name, description, rating, latitude, longitude, imageUrl, addedBy, numberReviews, timestamp)
                 } else {
                     Log.d("MapsScreen", "Invalid object data: $document")
                     null
@@ -505,14 +646,15 @@ private fun checkIfUserReviewed(mapObject: MapObject, username: String, onResult
         }
 }
 
-private fun checkIfUserVisited(mapObject: MapObject, onResult: (Boolean) -> Unit) {
+private fun checkIfUserVisited(context: Context, mapObject: MapObject, onResult: (Boolean) -> Unit) {
     val firestore = FirebaseFirestore.getInstance()
     val currentUser = FirebaseAuth.getInstance().currentUser
 
     firestore.collection("users").document(currentUser?.uid ?: "").get()
         .addOnSuccessListener { document ->
-            val visited = document.get("visited") as? Map<*, *>
-            val hasVisited = visited?.containsKey(mapObject.name.replace(" ", "_")) ?: false
+            val visited = document.get("visited") as? Map<String, Boolean>
+            val objectId = mapObject.name.replace(" ", "_")
+            val hasVisited = visited?.containsKey(objectId) ?: false
             onResult(hasVisited)
         }
         .addOnFailureListener { exception ->
@@ -521,19 +663,31 @@ private fun checkIfUserVisited(mapObject: MapObject, onResult: (Boolean) -> Unit
         }
 }
 
-private fun markAsVisited(mapObject: MapObject) {
+private fun markAsVisited(context: Context, mapObject: MapObject) {
     val firestore = FirebaseFirestore.getInstance()
     val currentUser = FirebaseAuth.getInstance().currentUser
 
     currentUser?.let { user ->
-        val visitedData = mapOf(mapObject.name.replace(" ", "_") to true)
-        firestore.collection("users").document(user.uid)
-            .update("visited", FieldValue.arrayUnion(visitedData))
-            .addOnSuccessListener {
-                Log.d("MapsScreen", "Marked as visited successfully")
+        val objectId = mapObject.name.replace(" ", "_")
+        firestore.collection("users").document(user.uid).get()
+            .addOnSuccessListener { document ->
+                val visited = document.get("visited") as? Map<String, Boolean>
+                if (visited != null && visited.containsKey(objectId)) {
+                    Toast.makeText(context, "You have already marked this object as visited.", Toast.LENGTH_SHORT).show()
+                } else {
+                    firestore.collection("users").document(user.uid)
+                        .update("visited.$objectId", true)
+                        .addOnSuccessListener {
+                            Toast.makeText(context, "Marked as visited successfully.", Toast.LENGTH_SHORT).show()
+                            addPoints("visit")
+                        }
+                        .addOnFailureListener { e ->
+                            Log.e("MapsScreen", "Error marking as visited", e)
+                        }
+                }
             }
             .addOnFailureListener { e ->
-                Log.e("MapsScreen", "Error marking as visited", e)
+                Log.e("MapsScreen", "Error fetching user data", e)
             }
     }
 }
@@ -541,6 +695,12 @@ private fun markAsVisited(mapObject: MapObject) {
 private fun resizeBitmap(context: Context, drawableRes: Int, width: Int, height: Int): Bitmap {
     val bitmap = BitmapFactory.decodeResource(context.resources, drawableRes)
     return Bitmap.createScaledBitmap(bitmap, width, height, false)
+}
+
+private fun distanceBetween(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Float {
+    val results = FloatArray(1)
+    Location.distanceBetween(lat1, lon1, lat2, lon2, results)
+    return results[0]
 }
 
 @Preview(showBackground = true)

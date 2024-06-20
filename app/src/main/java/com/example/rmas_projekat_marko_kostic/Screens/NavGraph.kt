@@ -11,8 +11,9 @@ fun NavGraph(navController: NavHostController) {
     NavHost(navController, startDestination = "login") {
         composable("login") { LoginScreen(navController) }
         composable("register") { RegisterScreen(navController) }
-        composable("main") { MainScreen(navController) } // Placeholder for the main screen
-        composable("map") { MapsScreen() } // Dodaj rutu za MapsScreen
+        composable("main") { MainScreen(navController) }
+        composable("map") { MapsScreen() }
         composable("add_object") { AddObjectScreen(navController) }
+        composable("leaderboard") { LeaderboardScreen() }
     }
 }

@@ -195,11 +195,14 @@ fun addObjectToFirestore(
                 "longitude" to location.longitude,
                 "image_url" to "",
                 "added_by" to username,
+                "created_at" to timestamp,
+                "number_reviews" to 1,
                 "comments" to listOf(
                     mapOf(
                         "user_id" to username,
                         "comment_text" to review,
-                        "timestamp" to timestamp
+                        "timestamp" to timestamp,
+                        "rating" to rating // Ensure the rating is included here
                     )
                 )
             )
