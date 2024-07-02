@@ -25,7 +25,9 @@ import java.util.concurrent.ConcurrentHashMap
 
 class LocationService : Service() {
 
+    /*da dobijemo lokaciju koristimo ovo dole*/
     private lateinit var fusedLocationClient: FusedLocationProviderClient
+    /*za azuriranje lokacije ovo dole koristimo*/
     private lateinit var locationCallback: LocationCallback
     private val firestore = FirebaseFirestore.getInstance()
     private val lastNotificationTimes = ConcurrentHashMap<String, Long>()
@@ -48,6 +50,7 @@ class LocationService : Service() {
         locationCallback = object : LocationCallback() {
             override fun onLocationResult(locationResult: LocationResult) {
                 Log.d("LocationService", "Location result received")
+                /* sad idemo kroz sve lokacije koje smo dobili u azuriranju*/
                 for (location in locationResult.locations) {
                     Log.d("LocationService", "Location: $location")
                     updateLocation(location)
@@ -140,6 +143,7 @@ class LocationService : Service() {
                             Log.d("LocationService", "Object within 100 meters")
                             val currentTime = System.currentTimeMillis()
                             val lastNotificationTime = lastNotificationTimes[document.id] ?: 0
+                            /*ovde dole je ona provera od 20 minuta pre slanja notification za isti objekat*/
                             if (currentTime - lastNotificationTime > notificationInterval) {
                                 sendNotification("Object Nearby: $name", "Description: $description\nRating: $rating")
                                 lastNotificationTimes[document.id] = currentTime

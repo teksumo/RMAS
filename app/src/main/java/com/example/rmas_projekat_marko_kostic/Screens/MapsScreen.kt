@@ -81,6 +81,8 @@ fun MapsScreen() {
     var filterRadius by remember { mutableStateOf<Float?>(null) }
     var showFilters by remember { mutableStateOf(false) }
 
+    //pribavljamo current usera i smestamo u currentUsername, ovo LaunchedEffect se pokrece svaki put kad se current user
+    //promeni
     LaunchedEffect(currentUser) {
         currentUser?.let {
             firestore.collection("users").document(it.uid).get()
@@ -93,6 +95,7 @@ fun MapsScreen() {
         }
     }
 
+    //svaki put se ovo pokrece kad se locationPermissionState promeni
     LaunchedEffect(locationPermissionState.hasPermission) {
         if (locationPermissionState.hasPermission) {
             Log.d("MapsScreen", "Location permission granted")
@@ -128,6 +131,7 @@ fun MapsScreen() {
 
             // Filter UI
             if (showFilters) {
+                //filter section je dole, ovde samo ubacujemo vrednosti u constructor
                 FilterSection(
                     filterName = filterName,
                     onNameChange = { filterName = it },
@@ -144,6 +148,7 @@ fun MapsScreen() {
                 )
             }
 
+            //ovde se vrsi samo filtriranje, i onda za svaki filteredObject se nacrta pin na mapi
             Box(modifier = Modifier.fillMaxSize()) {
                 GoogleMap(
                     modifier = Modifier.fillMaxSize(),
@@ -162,9 +167,12 @@ fun MapsScreen() {
                             currentLocation!!.longitude,
                             it.latitude,
                             it.longitude
+                            //ovaj isRadiusMatch ce biti true ili ako je filterRadius null, ili ako je distanceBetween<= filter radius,
+                            //tj ako smo u tom radiusu
                         ) <= filterRadius!!)
                         isNameMatch && isAuthorMatch && isRatingMatch && isStartDateMatch && isEndDateMatch && isRadiusMatch
                     }
+                    //za svaki objekat unutar FilteredObjects stavljamo marker na mapi
                     filteredObjects.forEach { obj ->
                         Marker(
                             position = LatLng(obj.latitude, obj.longitude),
@@ -178,13 +186,16 @@ fun MapsScreen() {
                         )
                     }
                 }
+                //ovime azuriramo lokaciju korisnika na mapi kada se promeni lokacija korisnika
                 currentLocation?.let {
                     LaunchedEffect(it) {
                         cameraPositionState.position = com.google.android.gms.maps.model.CameraPosition(it, 15f, 0f, 0f)
                         Log.d("MapsScreen", "Camera position updated: $it")
                     }
                 }
+                //prikaz selektovanog objekta koji izaberemo na mapi
                 selectedObject?.let { obj ->
+                    //ovo objectDetailsDialog je dole implementiran, ovo je konstruktor
                     ObjectDetailsDialog(
                         mapObject = obj,
                         onDismissRequest = { selectedObject = null },
@@ -215,6 +226,7 @@ fun MapsScreen() {
                 if (showReviewDialog && selectedObject != null) {
                     AddReviewDialog(
                         mapObject = selectedObject!!,
+                        //ovo onDismissRequest postavlja na false kad se zatvori pop up
                         onDismissRequest = { showReviewDialog = false },
                         onSubmitReview = { review, rating ->
                             addReviewToObject(selectedObject!!, review, rating, currentUsername)
@@ -249,6 +261,11 @@ fun MapsScreen() {
 @Composable
 fun FilterSection(
     filterName: String,
+    //ovo string znaci da prima string, a unit nam kaze da ne vraca nista, i poziva se ovo kad se promeni u polju
+    //za unos teksta vrednost
+    //ovo on name change PROSLEDIMO kad pozivamo FilterSection, i to je ustvari callback funkcija, i uvek kad se promeni
+    //name u filter, poziva se ova funkcija on name change, u nasem slucaju to se nalazi u 137. liniji koda,
+    //on name change nam sluzi da filterName = it, tj da se u filter name stavi novo ime
     onNameChange: (String) -> Unit,
     filterAuthor: String,
     onAuthorChange: (String) -> Unit,
@@ -306,6 +323,8 @@ fun FilterSection(
     }
 }
 
+
+//za biranje datuma code
 @Composable
 fun DatePicker(
     label: String,
@@ -335,6 +354,7 @@ fun DatePicker(
 
 @Composable
 fun ObjectDetailsDialog(
+
     mapObject: MapObject,
     onDismissRequest: () -> Unit,
     onVisit: () -> Unit,

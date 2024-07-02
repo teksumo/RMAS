@@ -19,6 +19,14 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.storage.FirebaseStorage
 import java.util.*
 
+/* VAZNO remember nam cuva stanje tokom recomposition faze*/
+/* mutableStateOf funkcija koja nam kreira stanje koje se moze menjati. Kad se
+* vrenost stanja promeni, Compose automatski osvezava deo UI gde se koristi ta vrednost*/
+
+/* Composable koristimo kod funkcija koje definisu UI. Kad se stanje unutar ovih
+funkcija promeni, Compose automatski osvezava UI koji zavisi od tog stanja.*/
+
+
 @Composable
 fun RegisterScreen(navController: NavController) {
     val auth = FirebaseAuth.getInstance()
@@ -36,8 +44,13 @@ fun RegisterScreen(navController: NavController) {
 
     val db = FirebaseFirestore.getInstance()
     val storage = FirebaseStorage.getInstance()
+    /* sa ovim rememberLauncher... kreiramo aktivnosti*/
     val imagePickerLauncher = rememberLauncherForActivityResult(
+        /* sa ovim getContent otvara galerijku za izbor slike*/
         contract = ActivityResultContracts.GetContent(),
+        /* ovo ispod je lambda fja koja se poziva kada korisnik izabere sliku i aktivnost se zavrsi
+        onResult iskecuje rezultat Uri, i postavlja photoUri na uri
+         */
         onResult = { uri: Uri? ->
             photoUri = uri
         }
@@ -124,8 +137,9 @@ fun RegisterScreen(navController: NavController) {
                     onClick = {
                         if (password == confirmPassword) {
                             loading = true
-                            auth.createUserWithEmailAndPassword(email, password)
-                                .addOnCompleteListener { task ->
+                            /* auth ovo je instanca firebase Auth, s njom radimo reg i sve */
+                            auth.createUserWithEmailAndPassword(email, password) /*pozivamo registraciju u firebase*/
+                                .addOnCompleteListener { task -> /* ovim Listenerom proveravamo da li je asinhrona operacija uspesno izvrsena ili ne*/
                                     if (task.isSuccessful) {
                                         val user = auth.currentUser
                                         val userId = user?.uid
@@ -140,14 +154,17 @@ fun RegisterScreen(navController: NavController) {
                                         )
 
                                         if (userId != null) {
+                                            /* ovo.set(profileData) koristimo da upisemo podatke u odabrani dokument, upisujemo ovaj profileData*/
                                             db.collection("users").document(userId).set(profileData)
                                                 .addOnCompleteListener { profileTask ->
-                                                    if (profileTask.isSuccessful) {
-                                                        photoUri?.let { uri ->
+                                                    if (profileTask.isSuccessful) {/*sad se vrsi upload slike AKO JE IMA*/
+                                                        photoUri?.let { uri -> /* AKO JE photoURI null onda se samo preskoci ovo*/
+                                                            /*ovime storage.reference.child dobijamo referencu za cuvanje slike*/
                                                             val storageRef = storage.reference.child("profile_photos/${UUID.randomUUID()}.jpg")
-                                                            storageRef.putFile(uri)
+                                                            storageRef.putFile(uri) /* ovime uploadujemo sliku*/
                                                                 .addOnSuccessListener {
                                                                     storageRef.downloadUrl.addOnSuccessListener { downloadUrl ->
+                                                                        /*ovime stavljamo photoUrl u firebase*/
                                                                         db.collection("users").document(userId).update("photoUrl", downloadUrl.toString())
                                                                             .addOnSuccessListener {
                                                                                 loading = false
@@ -165,7 +182,7 @@ fun RegisterScreen(navController: NavController) {
                                                                     Toast.makeText(context, "Photo upload failed: ${exception.message}", Toast.LENGTH_LONG).show()
                                                                     Log.e("RegisterScreen", "Photo upload failed", exception)
                                                                 }
-                                                        } ?: run {
+                                                        } ?: run {/* ?: sam iskoristio ako se desi null vrednost za photoUri */
                                                             loading = false
                                                             showSuccessMessage = true
                                                         }

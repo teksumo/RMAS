@@ -28,6 +28,7 @@ data class User(
 fun LeaderboardScreen() {
     var users by remember { mutableStateOf<List<User>>(emptyList()) }
 
+    //ovo se poziva uvek kada se staruje leaderboard screen
     LaunchedEffect(Unit) {
         fetchLeaderboard { fetchedUsers ->
             users = fetchedUsers
@@ -43,7 +44,7 @@ fun LeaderboardScreen() {
                 modifier = Modifier.padding(bottom = 16.dp)
             )
 
-            // Table with all users sorted by points
+            // tabela sa svim korisnicima sortiranim po poenima
             LazyColumn(modifier = Modifier.fillMaxSize().padding(8.dp)) {
                 items(users) { user ->
                     Card(
@@ -96,6 +97,7 @@ private fun fetchLeaderboard(onUsersFetched: (List<User>) -> Unit) {
                     null
                 }
             }
+            //ovime vracamo listu korisnika koju smo sad napravili
             onUsersFetched(users)
         }
         .addOnFailureListener { e ->
